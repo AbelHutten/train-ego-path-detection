@@ -110,7 +110,8 @@ class Detector:
             engine = runtime.deserialize_cuda_engine(f.read())
         exectx = engine.create_execution_context()
         shapes = tuple(
-            [tuple(engine.get_binding_shape(i)) for i in range(engine.num_bindings)]
+            tuple(engine.get_tensor_shape(engine.get_tensor_name(i)))
+            for i in range(engine.num_io_tensors)
         )
         bindings = [
             self.cuda.mem_alloc(np.prod(shape).item() * np.dtype(np.float32).itemsize)
@@ -132,9 +133,9 @@ class Detector:
             parser.parse(model.read())
         if precision == "fp16":
             config.set_flag(self.trt.BuilderFlag.FP16)
-        engine = builder.build_engine(network, config)
+        engine = builder.build_serialized_network(network, config)
         with open(os.path.join(self.model_path, "best.trt"), "wb") as f:
-            f.write(engine.serialize())
+            f.write(engine)
         os.remove("temp.onnx")
 
     def infer_model_pytorch(self, img):
@@ -168,7 +169,7 @@ class Detector:
             list or PIL.Image.Image: Train ego-path detection result, whose type depends on the method used:
                 - Classification/Regression: List containing the left and right rails lists of rails point coordinates (x, y).
                 - Segmentation: PIL.Image.Image representing the binary mask of detected region.
-        """     
+        """
         original_shape = img.size
         crop_coords = self.get_crop_coords()
         if crop_coords is not None:
