@@ -54,6 +54,7 @@ def train(
     device,
     logger,
     val_iterations=1,
+    compiled_model=None,
 ):
     """Trains the model and saves the best weights.
 
@@ -69,24 +70,28 @@ def train(
         logger (logging.Logger): Logger to use.
         val_iterations (int, optional): Number of validation epochs to average. Defaults to 1.
     """
+    if compiled_model is None:
+        compiled_model = model
     train_loader, val_loader = dataloaders
     best_val_loss = float("inf")
     for epoch in range(epochs):
-        train_loss = train_epoch(model, criterion, device, train_loader, optimizer)
+        train_loss = train_epoch(
+            compiled_model, criterion, device, train_loader, optimizer
+        )
         val_loss = 0
         if val_loader is not None:
             # each validation epoch is unique due to data augmentation, so we can average multiple
             for _ in range(val_iterations):
-                val_loss += val_epoch(model, criterion, device, val_loader)
+                val_loss += val_epoch(compiled_model, criterion, device, val_loader)
             val_loss /= val_iterations
         if scheduler is not None:
             scheduler.step()
-        if epoch >= epochs * 0.9 and val_loss < best_val_loss:
+        if True:  # TODO epoch >= epochs * 0.9 and val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), os.path.join(save_path, "best.pt"))
         logger.info(
             f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
-            + f" | EPOCH {(epoch+1):0{len(str(epochs))}}/{epochs}"
+            + f" | EPOCH {(epoch + 1):0{len(str(epochs))}}/{epochs}"
             + f" | TRAIN LOSS: {train_loss:.5f}"
             + f" | VAL LOSS: {val_loss:.5f}"
         )

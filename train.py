@@ -147,9 +147,10 @@ def main(args):
     else:
         raise ValueError
     try:
-        model = torch.compile(model)
+        compiled_model = torch.compile(model)
     except Exception as e:
         print(f"torch.compile failed: {e}. Running model without compilation.")
+        compiled_model = model
 
     wandb.init(
         project="train-ego-path-detection",
@@ -178,7 +179,9 @@ def main(args):
     elif method == "segmentation":
         criterion = BinaryDiceLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+    optimizer = torch.optim.Adam(
+        compiled_model.parameters(), lr=config["learning_rate"]
+    )
     scheduler = (
         torch.optim.lr_scheduler.OneCycleLR(
             optimizer=optimizer,
@@ -203,6 +206,7 @@ def main(args):
         device=device,
         logger=logger,
         val_iterations=config["val_iterations"],
+        compiled_model=compiled_model,
     )
 
     if len(test_indices) > 0:
