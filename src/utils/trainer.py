@@ -86,7 +86,7 @@ def train(
             val_loss /= val_iterations
         if scheduler is not None:
             scheduler.step()
-        if True:  # TODO epoch >= epochs * 0.9 and val_loss < best_val_loss:
+        if epoch >= epochs * 0.9 and val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), os.path.join(save_path, "best.pt"))
         logger.info(
