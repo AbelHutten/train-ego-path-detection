@@ -49,7 +49,9 @@ class ResNetBackbone(nn.Module):
 
 
 class EfficientNetBackbone(nn.Module):
-    def __init__(self, version, out_levels=(8,), pretrained=False):
+    def __init__(
+        self, version, out_levels: tuple[int, ...] | None = None, pretrained=False
+    ):
         """Initializes the EfficientNet backbone.
 
         Args:
@@ -57,12 +59,29 @@ class EfficientNetBackbone(nn.Module):
             out_levels (tuple): Which stage outputs to return. Defaults to (8,) (i.e. the last stage).
             pretrained (bool): Whether to use pretrained weights. Defaults to False.
         """
+        if out_levels is None:
+            if version in ["v2-s", "v2-m", "v2-l"]:
+                out_levels = (7,)
+            else:
+                out_levels = (8,)
         super(EfficientNetBackbone, self).__init__()
         model_versions = {
             "b0": (models.efficientnet_b0, models.EfficientNet_B0_Weights.DEFAULT),
             "b1": (models.efficientnet_b1, models.EfficientNet_B1_Weights.DEFAULT),
             "b2": (models.efficientnet_b2, models.EfficientNet_B2_Weights.DEFAULT),
             "b3": (models.efficientnet_b3, models.EfficientNet_B3_Weights.DEFAULT),
+            "v2-s": (
+                models.efficientnet_v2_s,
+                models.EfficientNet_V2_S_Weights.DEFAULT,
+            ),
+            "v2-m": (
+                models.efficientnet_v2_m,
+                models.EfficientNet_V2_M_Weights.DEFAULT,
+            ),
+            "v2-l": (
+                models.efficientnet_v2_l,
+                models.EfficientNet_V2_L_Weights.DEFAULT,
+            ),
         }
         if version not in model_versions:
             raise NotImplementedError

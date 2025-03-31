@@ -36,7 +36,8 @@ def parse_arguments():
         "backbone",
         type=str,
         choices=[f"resnet{x}" for x in [18, 34, 50]]
-        + [f"efficientnet-b{x}" for x in [0, 1, 2, 3]],
+        + [f"efficientnet-b{x}" for x in [0, 1, 2, 3]]
+        + [f"efficientnet-v2-{x}" for x in ["s", "m", "l"]],
         help="Backbone to use (e.g., 'resnet18', 'efficientnet-b3').",
     )
     parser.add_argument(
