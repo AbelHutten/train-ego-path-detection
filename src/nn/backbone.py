@@ -117,7 +117,7 @@ class ConvNeXtBackbone(nn.Module):
     def __init__(
         self,
         version: str,
-        out_levels: tuple[int, ...] = (4,),
+        out_levels: tuple[int, ...] = (3,),
         pretrained: bool = True,
         weights: str | None = None,
         **kwargs,
@@ -162,7 +162,7 @@ class ConvNeXtBackbone(nn.Module):
                 raise RuntimeError(f"No Conv2d modules found in ConvNeXt stage {i}.")
             self.out_channels.append(convs[-1].out_channels)
         self.out_channels = tuple(self.out_channels)
-        self.reduction_factor = 4 * 2**3  # 32, but written in a way similar to the other backbones for consistency
+        self.reduction_factor = 4 * 2 ** (out_levels[-1] - 1)
 
     def forward(self, x: torch.Tensor):
         features = [x] if self.out_levels[0] == 0 else []
