@@ -22,6 +22,7 @@ from src.utils.evaluate import IoUEvaluator
 from src.utils.trainer import train
 
 torch.use_deterministic_algorithms(True)
+torch.set_float32_matmul_precision("high")
 
 
 def parse_arguments():
@@ -37,15 +38,15 @@ def parse_arguments():
         type=str,
         choices=[f"resnet{x}" for x in [18, 34, 50]]
         + [f"efficientnet-b{x}" for x in [0, 1, 2, 3]]
-        + [f"efficientnet-v2-{x}" for x in ["s", "m", "l"]],
+        + [f"efficientnet-v2-{x}" for x in ["s", "m", "l"]]
+        + [f"convnext_{x}" for x in ["tiny", "small", "base", "large"]],
         help="Backbone to use (e.g., 'resnet18', 'efficientnet-b3').",
     )
     parser.add_argument(
         "--device",
         type=str,
         default="cuda",
-        choices=["cpu", "cuda", "mps"]
-        + [f"cuda:{x}" for x in range(torch.cuda.device_count())],
+        choices=["cpu", "cuda", "mps"] + [f"cuda:{x}" for x in range(torch.cuda.device_count())],
         help="Device to use ('cpu', 'cuda', 'cuda:x' or 'mps').",
     )
     return parser.parse_args()
@@ -147,6 +148,25 @@ def main(args):
         ).to(device)
     else:
         raise ValueError
+
+    # TODO: Remove this and make it nicer
+    # TODO: It should also be in the config file. freeze_backbone: True
+    import torch.nn as nn
+
+    FREEZE_BACKBONE = False
+    if FREEZE_BACKBONE:
+
+        def freeze_convnext(backbone: nn.Module):
+            for p in backbone.parameters():
+                p.requires_grad_(False)
+
+        # usage
+        if isinstance(model, SegmentationNet):
+            freeze_convnext(model.encoder)
+        else:
+            freeze_convnext(model.backbone)
+    ##############################################################
+
     try:
         compiled_model = torch.compile(model)
     except Exception as e:
@@ -180,17 +200,11 @@ def main(args):
     elif method == "segmentation":
         criterion = BinaryDiceLoss()
 
-    optimizer = torch.optim.Adam(
-        compiled_model.parameters(), lr=config["learning_rate"]
-    )
+    # TODO: Change together with the TODO above
+    # optimizer = torch.optim.Adam(compiled_model.parameters(), lr=config["learning_rate"])
+    optimizer = torch.optim.Adam([p for p in compiled_model.parameters() if p.requires_grad], lr=config["learning_rate"])
     scheduler = (
-        torch.optim.lr_scheduler.OneCycleLR(
-            optimizer=optimizer,
-            max_lr=config["learning_rate"],
-            total_steps=config["epochs"],
-            pct_start=0.1,
-            verbose=False,
-        )
+        torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["epochs"], pct_start=0.1)
         if config["scheduler"] == "one_cycle"
         else None
     )

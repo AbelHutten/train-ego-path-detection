@@ -2,7 +2,7 @@ import math
 
 import torch.nn as nn
 
-from .backbone import EfficientNetBackbone, ResNetBackbone
+from .backbone import EfficientNetBackbone, ResNetBackbone, ConvNeXtBackbone
 from .decoder import UNetDecoder
 
 
@@ -30,9 +30,7 @@ class ClassificationNet(nn.Module):
         """
         super(ClassificationNet, self).__init__()
         if backbone.startswith("efficientnet"):
-            self.backbone = EfficientNetBackbone(
-                version=backbone[13:], pretrained=pretrained
-            )
+            self.backbone = EfficientNetBackbone(version=backbone[13:], pretrained=pretrained)
         elif backbone.startswith("resnet"):
             self.backbone = ResNetBackbone(version=backbone[6:], pretrained=pretrained)
         else:
@@ -63,12 +61,13 @@ class ClassificationNet(nn.Module):
 class RegressionNet(nn.Module):
     def __init__(
         self,
-        backbone,
-        input_shape,
-        anchors,
-        pool_channels,
-        fc_hidden_size,
-        pretrained=False,
+        backbone: str,
+        input_shape: tuple[int, ...],
+        anchors: int,
+        pool_channels: int,
+        fc_hidden_size: int,
+        pretrained: bool = False,
+        weights: str | None = None,
     ):
         """Initializes the train ego-path detection model for the regression method.
 
@@ -79,14 +78,18 @@ class RegressionNet(nn.Module):
             pool_channels (int): Number of output channels of the pooling layer.
             fc_hidden_size (int): Number of units in the hidden layer of the fully connected part.
             pretrained (bool, optional): Whether to use pretrained weights for the backbone. Defaults to False.
+            weigths (str, optional): Path to the weights file for the backbone, if applicable.
         """
         super(RegressionNet, self).__init__()
         if backbone.startswith("efficientnet"):
-            self.backbone = EfficientNetBackbone(
-                version=backbone[13:], pretrained=pretrained
-            )
+            self.backbone = EfficientNetBackbone(version=backbone[13:], pretrained=pretrained)
         elif backbone.startswith("resnet"):
             self.backbone = ResNetBackbone(version=backbone[6:], pretrained=pretrained)
+        elif backbone.lower().startswith("convnext"):
+            if pretrained and weights is None:
+                pretrained = False
+                print("trained to False since no weights supplied and there is no default implemented.")
+            self.backbone = ConvNeXtBackbone(version=backbone, weights=weights, pretrained=pretrained)
         else:
             raise NotImplementedError
         self.pool = nn.Conv2d(
@@ -115,9 +118,9 @@ class RegressionNet(nn.Module):
 class SegmentationNet(nn.Module):
     def __init__(
         self,
-        backbone,
-        decoder_channels,
-        pretrained=False,
+        backbone: str,
+        decoder_channels: tuple[int, ...],
+        pretrained: bool = False,
     ):
         """Initializes the train ego-path detection model for the segmentation method.
 
@@ -139,6 +142,8 @@ class SegmentationNet(nn.Module):
                 out_levels=(1, 2, 3, 4, 5),
                 pretrained=pretrained,
             )
+        elif backbone.startswith("convnext"):
+            self.encoder = ConvNeXtBackbone(version=backbone, out_levels=(1, 2, 3, 4), pretrained=True)
         else:
             raise NotImplementedError
         self.decoder = UNetDecoder(

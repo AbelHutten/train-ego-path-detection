@@ -73,7 +73,7 @@ class LatencyEvaluator:
             model_path (str): Path to the trained model directory (containing config.yaml and best.pt).
             runtime (str): Runtime environment to use for model inference ("pytorch" or "tensorrt").
             device (str): Device to use for model inference ("cpu", "cuda", "cuda:x" or "mps").
-        """        
+        """
         self.runtime = runtime
         if runtime == "pytorch":
             self.detector = Detector(model_path, None, runtime, device)

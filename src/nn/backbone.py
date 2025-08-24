@@ -1,5 +1,13 @@
+import torch
 import torch.nn as nn
 import torchvision.models as models
+from dinov3.hub.backbones import (
+    dinov3_convnext_base,
+    dinov3_convnext_large,
+    dinov3_convnext_small,
+    dinov3_convnext_tiny,
+    Weights,
+)
 
 
 class ResNetBackbone(nn.Module):
@@ -49,9 +57,7 @@ class ResNetBackbone(nn.Module):
 
 
 class EfficientNetBackbone(nn.Module):
-    def __init__(
-        self, version, out_levels: tuple[int, ...] | None = None, pretrained=False
-    ):
+    def __init__(self, version, out_levels: tuple[int, ...] | None = None, pretrained=False):
         """Initializes the EfficientNet backbone.
 
         Args:
@@ -103,5 +109,65 @@ class EfficientNetBackbone(nn.Module):
         for i, stage in enumerate(self.stages):
             x = stage(x)
             if i + 1 in self.out_levels:
+                features.append(x)
+        return features
+
+
+class ConvNeXtBackbone(nn.Module):
+    def __init__(
+        self,
+        version: str,
+        out_levels: tuple[int, ...] = (4,),
+        pretrained: bool = True,
+        weights: str | None = None,
+        **kwargs,
+    ):
+        """Initializes the ConvNeXt backbone.
+
+        Args:
+            version (str): ConvNeXt size. Accepts "convnext_tiny", "convnext_small", "convnext_base", "convnext_large".
+            out_levels (tuple): Which stage outputs to return. 1..4 correspond to the
+                four ConvNeXt stages (after each downsample+stage). 0 includes the input.
+                Defaults to (4,) (i.e., last stage only).
+            pretrained (bool): Kept for API parity; not used by this custom ConvNeXt.
+            **kwargs: Passed to ConvNeXt constructor (e.g., drop_path_rate, layer_scale_init_value, patch_size).
+        """
+        super().__init__()
+        convnext_size = version.split("_")[1]
+        if weights is None:
+            weights = Weights.LVD1689M
+        if convnext_size == "tiny":
+            weights = "/home/abel/Documents/tepnet_fork/models/dinov3_convnext_tiny_pretrain_lvd1689m-21b726bb.pth"
+            pretrained = True
+            model = dinov3_convnext_tiny(pretrained=pretrained, weights=weights)
+        elif convnext_size == "small":
+            model = dinov3_convnext_small(pretrained=pretrained, weights=weights)
+        elif convnext_size == "base":
+            model = dinov3_convnext_base(pretrained=pretrained, weights=weights)
+        elif convnext_size == "large":
+            weights = "/home/abel/Documents/tepnet_fork/models/dinov3_convnext_large_pretrain_lvd1689m-61fa432d.pth"
+            pretrained = True
+            model = dinov3_convnext_large(pretrained=pretrained, weights=weights)
+        self.stages = nn.ModuleList([nn.Sequential(model.downsample_layers[i], model.stages[i]) for i in range(4)])
+        self.out_levels = out_levels
+        self.out_channels = [3] if (len(self.out_levels) > 0 and self.out_levels[0] == 0) else []
+        for i in self.out_levels:
+            if i == 0:
+                continue
+            if not (1 <= i <= 4):
+                raise ValueError(f"out_levels must be in {{0,1,2,3,4}}; got {i}")
+            stage = self.stages[i - 1]
+            convs = [m for m in stage.modules() if isinstance(m, nn.Conv2d)]
+            if len(convs) == 0:
+                raise RuntimeError(f"No Conv2d modules found in ConvNeXt stage {i}.")
+            self.out_channels.append(convs[-1].out_channels)
+        self.out_channels = tuple(self.out_channels)
+        self.reduction_factor = 4 * 2**3  # 32, but written in a way similar to the other backbones for consistency
+
+    def forward(self, x: torch.Tensor):
+        features = [x] if self.out_levels[0] == 0 else []
+        for i, stage in enumerate(self.stages, start=1):
+            x = stage(x)
+            if i in self.out_levels:
                 features.append(x)
         return features
