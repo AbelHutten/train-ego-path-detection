@@ -117,7 +117,7 @@ class ConvNeXtBackbone(nn.Module):
     def __init__(
         self,
         version: str,
-        out_levels: tuple[int, ...] = (3,),
+        out_levels: tuple[int, ...] = (4,),
         pretrained: bool = True,
         weights: str | None = None,
         **kwargs,

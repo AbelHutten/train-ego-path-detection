@@ -56,7 +56,7 @@ class PathsDataset(Dataset):
             transforms.Compose(
                 [
                     to_scaled_tensor,
-                    transforms.Resize(self.config["input_shape"][1:][::-1]),
+                    transforms.Resize(self.config["input_shape"][1:][::-1], antialias=True),
                 ]
             )
             if to_tensor
@@ -77,6 +77,7 @@ class PathsDataset(Dataset):
             img = self.to_tensor(img)
         if self.img_aug:
             img = self.img_aug(img)
+        img = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))(img)
         if self.method == "regression":
             path_gt, ylim_gt = self.generate_target_regression(rails_mask)
             if self.to_tensor:
@@ -91,9 +92,7 @@ class PathsDataset(Dataset):
         elif self.method == "segmentation":
             segmentation = self.generate_target_segmentation(rails_mask)
             if self.to_tensor:
-                segmentation = segmentation.resize(
-                    self.config["input_shape"][1:][::-1], Image.NEAREST
-                )
+                segmentation = segmentation.resize(self.config["input_shape"][1:][::-1], Image.NEAREST)
                 segmentation = to_scaled_tensor(segmentation)
             return img, segmentation
 
@@ -133,9 +132,7 @@ class PathsDataset(Dataset):
             random_crop_left = 2 * rails_mask_last_line_idx[0] - random_crop_left
         random_crop_left = max(random_crop_left, 0)
         # random right crop
-        largest_margin = max(
-            mean_crop_right - most_right_rail, img.width - 1 - mean_crop_right
-        )
+        largest_margin = max(mean_crop_right - most_right_rail, img.width - 1 - mean_crop_right)
         std_dev = largest_margin * self.config["std_dev_factor_sides"]
         random_crop_right = round(np.random.normal(mean_crop_right, std_dev))
         if random_crop_right < rails_mask_last_line_idx[-1]:
@@ -153,12 +150,8 @@ class PathsDataset(Dataset):
         random_crop_top = max(random_crop_top, 0)
         random_crop_top = min(random_crop_top, img.height - 2)  # at least 2 rows
         # crop image and mask
-        img = img.crop(
-            (random_crop_left, random_crop_top, random_crop_right + 1, img.height)
-        )
-        rails_mask = rails_mask[
-            random_crop_top:, random_crop_left : random_crop_right + 1
-        ]
+        img = img.crop((random_crop_left, random_crop_top, random_crop_right + 1, img.height))
+        rails_mask = rails_mask[random_crop_top:, random_crop_left : random_crop_right + 1]
         return img, rails_mask
 
     def resize_mask(self, mask, shape):
@@ -180,14 +173,8 @@ class PathsDataset(Dataset):
 
     def generate_target_regression(self, rails_mask):
         unvalid_rows = np.where(np.sum(rails_mask, axis=1) != 2)[0]
-        ylim_target = (
-            float(1 - (unvalid_rows[-1] + 1) / rails_mask.shape[0])
-            if len(unvalid_rows) > 0
-            else 1.0
-        )
-        rails_mask = self.resize_mask(
-            rails_mask, (self.config["anchors"], rails_mask.shape[1])
-        )
+        ylim_target = float(1 - (unvalid_rows[-1] + 1) / rails_mask.shape[0]) if len(unvalid_rows) > 0 else 1.0
+        rails_mask = self.resize_mask(rails_mask, (self.config["anchors"], rails_mask.shape[1]))
         traj_target = np.array(
             [np.zeros(self.config["anchors"]), np.ones(self.config["anchors"])],
             dtype=np.float32,
@@ -202,12 +189,8 @@ class PathsDataset(Dataset):
         return traj_target, ylim_target
 
     def generate_target_classification(self, rails_mask):
-        rails_mask = self.resize_mask(
-            rails_mask, (self.config["anchors"], self.config["classes"])
-        )
-        target = (
-            np.ones((2, self.config["anchors"]), dtype=int) * self.config["classes"]
-        )
+        rails_mask = self.resize_mask(rails_mask, (self.config["anchors"], self.config["classes"]))
+        target = np.ones((2, self.config["anchors"]), dtype=int) * self.config["classes"]
         for i in range(self.config["anchors"]):
             row = rails_mask.shape[0] - 1 - i
             rails_points = np.nonzero(rails_mask[row, :])[0]

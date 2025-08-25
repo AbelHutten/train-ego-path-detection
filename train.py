@@ -153,7 +153,7 @@ def main(args):
     # TODO: It should also be in the config file. freeze_backbone: True
     import torch.nn as nn
 
-    FREEZE_BACKBONE = False
+    FREEZE_BACKBONE = True
     if FREEZE_BACKBONE:
 
         def freeze_convnext(backbone: nn.Module):

@@ -143,7 +143,7 @@ class SegmentationNet(nn.Module):
                 pretrained=pretrained,
             )
         elif backbone.startswith("convnext"):
-            self.encoder = ConvNeXtBackbone(version=backbone, out_levels=(1, 2, 3, 4), pretrained=True)
+            self.encoder = ConvNeXtBackbone(version=backbone, out_levels=(0, 1, 2, 3, 4), pretrained=True)
         else:
             raise NotImplementedError
         self.decoder = UNetDecoder(

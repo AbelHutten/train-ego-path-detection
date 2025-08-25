@@ -22,14 +22,8 @@ def split_dataset(indices, proportions):
     """
     train_prop, val_prop, test_prop = proportions
     train_indices = indices[: int(train_prop * len(indices))]
-    val_indices = indices[
-        int(train_prop * len(indices)) : int((train_prop + val_prop) * len(indices))
-    ]
-    test_indices = indices[
-        int((train_prop + val_prop) * len(indices)) : int(
-            (train_prop + val_prop + test_prop) * len(indices)
-        )
-    ]
+    val_indices = indices[int(train_prop * len(indices)) : int((train_prop + val_prop) * len(indices))]
+    test_indices = indices[int((train_prop + val_prop) * len(indices)) : int((train_prop + val_prop + test_prop) * len(indices))]
     return train_indices, val_indices, test_indices
 
 
