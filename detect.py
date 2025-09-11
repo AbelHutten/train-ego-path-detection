@@ -12,6 +12,8 @@ from src.utils.common import simple_logger
 from src.utils.interface import Detector
 from src.utils.visualization import draw_egopath
 
+import tqdm
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Ego-Path Detection Inference Script")
@@ -58,8 +60,7 @@ def parse_arguments():
         "--device",
         type=str,
         default="cuda",
-        choices=["cpu", "cuda", "mps"]
-        + [f"cuda:{x}" for x in range(torch.cuda.device_count())],
+        choices=["cpu", "cuda", "mps"] + [f"cuda:{x}" for x in range(torch.cuda.device_count())],
         help="Device to use ('cpu', 'cuda', 'cuda:x' or 'mps').",
     )
 
@@ -111,17 +112,13 @@ def main(args):
         out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
         start_frame = int(args.start * fps)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        max_frames = (
-            int(args.end * fps) - start_frame if args.end is not None else total_frames
-        )
+        max_frames = int(args.end * fps) - start_frame if args.end is not None else total_frames
         current_frame = 0
-        logger.info(
-            f"\nFRAMES: {total_frames}"
-            + f" | RESOLUTION: {frame_width}x{frame_height}"
-            + f" | FPS: {fps}"
-        )
-        progress_bar = simple_logger(f"{__name__}_progress", "info", terminator="\r")
+        logger.info(f"\nFRAMES: {total_frames}" + f" | RESOLUTION: {frame_width}x{frame_height}" + f" | FPS: {fps}")
+        # progress_bar = simple_logger(f"{__name__}_progress", "info", terminator="\r")
+        pbar = tqdm.tqdm(total=max_frames)
         while current_frame < max_frames:
+            pbar.update()
             ret, frame = cap.read()
             if not ret:
                 break
@@ -132,10 +129,6 @@ def main(args):
             vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)
             out.write(vis)
             current_frame += 1
-            progress_bar.info(
-                f"Processed {current_frame:0{len(str(max_frames))}}/{max_frames} frames"
-                + f" ({current_frame/max_frames*100:.2f}%)"
-            )
         cap.release()
         out.release()
         logger.info("")

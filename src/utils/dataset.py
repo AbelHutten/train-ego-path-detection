@@ -75,9 +75,11 @@ class PathsDataset(Dataset):
         img, rails_mask = self.random_flip_lr(img, rails_mask)
         if self.to_tensor:
             img = self.to_tensor(img)
-        if self.img_aug:
+            if self.img_aug:
+                img = self.img_aug(img)
+            img = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))(img)
+        elif self.img_aug:
             img = self.img_aug(img)
-        img = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))(img)
         if self.method == "regression":
             path_gt, ylim_gt = self.generate_target_regression(rails_mask)
             if self.to_tensor:

@@ -134,7 +134,7 @@ class ConvNeXtBackbone(nn.Module):
         """
         super().__init__()
         convnext_size = version.split("_")[1]
-        if weights is None:
+        if weights is None and False:
             weights = Weights.LVD1689M
         if convnext_size == "tiny":
             weights = "/home/abel/Documents/tepnet_fork/models/dinov3_convnext_tiny_pretrain_lvd1689m-21b726bb.pth"

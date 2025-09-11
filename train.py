@@ -157,6 +157,7 @@ def main(args):
     if FREEZE_BACKBONE:
 
         def freeze_convnext(backbone: nn.Module):
+            backbone.eval()
             for p in backbone.parameters():
                 p.requires_grad_(False)
 

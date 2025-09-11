@@ -24,5 +24,5 @@ std_dev_factor_sides: 0.3  # standard deviation factor for the left-right crop a
 std_dev_factor_top: 0.1  # standard deviation factor for the top crop augmentation
 
 # paths configuration
-images_path: "/home/tlaurent/Datasets/rs19_val/jpgs/rs19_val"  # path to the images directory
-annotations_path: "/home/tlaurent/Datasets/rs19_egopath/rs19_egopath.json"  # path to the annotations file
+images_path: "/home/abel/Documents/tepnet_fork/train-ego-path-detection/train_resized"  # path to the images directory
+annotations_path: "/home/abel/Documents/tepnet_fork/train-ego-path-detection/rs19_egopath.json"  # path to the annotations file

@@ -67,11 +67,7 @@ class Detector:
             self.ctx.pop()
 
     def get_crop_coords(self):
-        return (
-            self.crop_coords()
-            if isinstance(self.crop_coords, Autocropper)
-            else self.crop_coords
-        )
+        return self.crop_coords() if isinstance(self.crop_coords, Autocropper) else self.crop_coords
 
     def init_model_pytorch(self):
         if self.config["method"] == "classification":
@@ -97,11 +93,7 @@ class Detector:
                 decoder_channels=tuple(self.config["decoder_channels"]),
             )
         model.to(self.device).eval()
-        model.load_state_dict(
-            torch.load(
-                os.path.join(self.model_path, "best.pt"), map_location=self.device
-            )
-        )
+        model.load_state_dict(torch.load(os.path.join(self.model_path, "best.pt"), map_location=self.device))
         return model
 
     def init_model_tensorrt(self):
@@ -109,14 +101,8 @@ class Detector:
         with open(os.path.join(self.model_path, "best.trt"), "rb") as f:
             engine = runtime.deserialize_cuda_engine(f.read())
         exectx = engine.create_execution_context()
-        shapes = tuple(
-            tuple(engine.get_tensor_shape(engine.get_tensor_name(i)))
-            for i in range(engine.num_io_tensors)
-        )
-        bindings = [
-            self.cuda.mem_alloc(np.prod(shape).item() * np.dtype(np.float32).itemsize)
-            for shape in shapes
-        ]
+        shapes = tuple(tuple(engine.get_tensor_shape(engine.get_tensor_name(i))) for i in range(engine.num_io_tensors))
+        bindings = [self.cuda.mem_alloc(np.prod(shape).item() * np.dtype(np.float32).itemsize) for shape in shapes]
         return exectx, bindings, shapes
 
     def convert_to_tensorrt(self, precision="fp16"):
@@ -141,6 +127,7 @@ class Detector:
     def infer_model_pytorch(self, img):
         tensor = to_scaled_tensor(img).unsqueeze(0).to(self.device)
         tensor = transforms.Resize(self.config["input_shape"][1:][::-1])(tensor)
+        tensor = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))(tensor)
         with torch.inference_mode():
             pred = self.model(tensor)
         return pred.cpu().numpy()
@@ -152,6 +139,7 @@ class Detector:
                 transforms.Resize(self.config["input_shape"][1:][::-1]),
             ]
         )(img).contiguous()
+        tensor = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))(tensor)
         tensor = tensor.numpy()  # convert to numpy
         self.cuda.memcpy_htod(self.bindings[0], tensor)  # copy input to GPU
         self.exectx.execute_v2(self.bindings)  # infer model

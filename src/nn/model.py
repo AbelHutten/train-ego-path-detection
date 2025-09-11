@@ -33,6 +33,8 @@ class ClassificationNet(nn.Module):
             self.backbone = EfficientNetBackbone(version=backbone[13:], pretrained=pretrained)
         elif backbone.startswith("resnet"):
             self.backbone = ResNetBackbone(version=backbone[6:], pretrained=pretrained)
+        elif backbone.lower().startswith("convnext"):
+            self.backbone = ConvNeXtBackbone(version=backbone, weights="placeholder", pretrained=True)  # TODO:this all needs to be fixed
         else:
             raise NotImplementedError
         self.pool = nn.Conv2d(

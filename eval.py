@@ -24,8 +24,8 @@ else:
 
 methods = [  # methods to evaluate
     "classification",
-    "regression",
-    "segmentation",
+    # "regression",
+    # "segmentation",
 ]
 backbones = [  # backbones to evaluate
     "efficientnet-b0",
@@ -39,6 +39,7 @@ backbones = [  # backbones to evaluate
     "resnet34",
     "resnet50",
 ]
+backbones = ["convnext_tiny"]
 runtimes = [  # runtimes to evaluate
     "pytorch",
     "tensorrt",
@@ -50,10 +51,8 @@ metrics = [  # metrics to evaluate
 
 basepath = os.path.dirname(__file__)
 models_to_eval = [
-    f
-    for f in os.listdir(os.path.join(basepath, "weights"))
-    if os.path.isdir(os.path.join(basepath, "weights", f))
-]
+    "/home/abel/Documents/tepnet_fork/train-ego-path-detection/weights/sandy-frost-127"
+]  # [f for f in os.listdir(os.path.join(basepath, "weights")) if os.path.isdir(os.path.join(basepath, "weights", f))]
 
 if "iou" in metrics:
     with open(os.path.join("configs", "global.yaml")) as f:
@@ -66,9 +65,7 @@ if "iou" in metrics:
     random.shuffle(indices)
     proportions = (config["train_prop"], config["val_prop"], config["test_prop"])
     train_indices, val_indices, test_indices = split_dataset(indices, proportions)
-    test_dataset = PathsDataset(
-        images_path, annotations_path, test_indices, config, "segmentation"
-    )
+    test_dataset = PathsDataset(images_path, annotations_path, test_indices, config, "segmentation")
 
 stats = []
 for model in models_to_eval:

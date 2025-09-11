@@ -5,3 +5,7 @@ wandb/
 **/__pycache__
 **/.DS_Store
 .vscode/
+
+.venv/
+train_resized
+weights_uncompiled/
