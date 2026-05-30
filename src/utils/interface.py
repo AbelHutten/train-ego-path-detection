@@ -4,13 +4,13 @@ import os
 import numpy as np
 import torch
 import yaml
-from PIL import Image
-from torchvision.transforms import v2 as transforms
+from PIL import Image, ImageOps
 
 from ..nn.model import ClassificationNet, RegressionNet, SegmentationNet
 from .autocrop import Autocropper
-from .common import to_scaled_tensor
+from .common import image_to_model_tensor
 from .postprocessing import (
+    average_regression_flip_predictions,
     classifications_to_rails,
     regression_to_rails,
     scale_mask,
@@ -51,8 +51,16 @@ class Detector:
             self.cuda = importlib.import_module("pycuda.driver")
             os.environ["CUDA_MODULE_LOADING"] = "LAZY"
             # convert model to tensorrt if not already done
-            if not os.path.exists(os.path.join(self.model_path, "best.trt")):
+            fp16_engine_path = os.path.join(self.model_path, "best.fp16.trt")
+            default_engine_path = os.path.join(self.model_path, "best.trt")
+            self.trt_engine_path = (
+                fp16_engine_path
+                if os.path.exists(fp16_engine_path)
+                else default_engine_path
+            )
+            if not os.path.exists(self.trt_engine_path):
                 self.convert_to_tensorrt()
+                self.trt_engine_path = default_engine_path
             # init cuda context on device
             self.cuda.init()
             device = 0 if device == "cuda" else int(device.split(":")[-1])
@@ -90,6 +98,21 @@ class Detector:
                 anchors=self.config["anchors"],
                 pool_channels=self.config["pool_channels"],
                 fc_hidden_size=self.config["fc_hidden_size"],
+                dinov3_repo_dir=self.config.get("dinov3_repo_dir", "external/dinov3"),
+                dinov3_weights_dir=self.config.get(
+                    "dinov3_weights_dir", "dinov3_models"
+                ),
+                dinov3_intermediate_layers=self.config.get(
+                    "dinov3_intermediate_layers", 4
+                ),
+                dinov3_adapter_channels=self.config.get(
+                    "dinov3_adapter_channels", 256
+                ),
+                dinov3_adapter_depth=self.config.get("dinov3_adapter_depth", 1),
+                dinov3_layer_set=self.config.get("dinov3_layer_set", "four_last"),
+                dinov3_use_cls_token=self.config.get(
+                    "dinov3_use_cls_token", False
+                ),
             )
         elif self.config["method"] == "segmentation":
             model = SegmentationNet(
@@ -106,56 +129,127 @@ class Detector:
 
     def init_model_tensorrt(self):
         runtime = self.trt.Runtime(self.trt.Logger(self.trt.Logger.ERROR))
-        with open(os.path.join(self.model_path, "best.trt"), "rb") as f:
+        with open(self.trt_engine_path, "rb") as f:
             engine = runtime.deserialize_cuda_engine(f.read())
         exectx = engine.create_execution_context()
-        shapes = tuple(
-            [tuple(engine.get_binding_shape(i)) for i in range(engine.num_bindings)]
+        self.trt_engine = engine
+        self.trt_stream = self.cuda.Stream()
+        self.trt_input_name = None
+        self.trt_output_name = None
+        for i in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(i)
+            mode = engine.get_tensor_mode(name)
+            if mode == self.trt.TensorIOMode.INPUT:
+                self.trt_input_name = name
+            elif mode == self.trt.TensorIOMode.OUTPUT:
+                self.trt_output_name = name
+        if self.trt_input_name is None or self.trt_output_name is None:
+            raise RuntimeError("TensorRT engine must have one input and one output.")
+
+        input_shape = (1, *self.config["input_shape"])
+        exectx.set_input_shape(self.trt_input_name, input_shape)
+        output_shape = tuple(exectx.get_tensor_shape(self.trt_output_name))
+        input_dtype = self.trt.nptype(engine.get_tensor_dtype(self.trt_input_name))
+        output_dtype = self.trt.nptype(engine.get_tensor_dtype(self.trt_output_name))
+        bindings = {
+            self.trt_input_name: self.cuda.mem_alloc(
+                int(np.prod(input_shape)) * np.dtype(input_dtype).itemsize
+            ),
+            self.trt_output_name: self.cuda.mem_alloc(
+                int(np.prod(output_shape)) * np.dtype(output_dtype).itemsize
+            ),
+        }
+        exectx.set_tensor_address(self.trt_input_name, int(bindings[self.trt_input_name]))
+        exectx.set_tensor_address(
+            self.trt_output_name,
+            int(bindings[self.trt_output_name]),
         )
-        bindings = [
-            self.cuda.mem_alloc(np.prod(shape).item() * np.dtype(np.float32).itemsize)
-            for shape in shapes
-        ]
+        self.trt_output_shape = output_shape
+        self.trt_output_dtype = output_dtype
+        self.trt_input_dtype = input_dtype
+        self.trt_input_shape = input_shape
+        dummy_input = np.random.random(input_shape).astype(input_dtype)
+        self.cuda.memcpy_htod_async(
+            bindings[self.trt_input_name],
+            dummy_input,
+            self.trt_stream,
+        )
+        self.trt_stream.synchronize()
+        shapes = (input_shape, output_shape)
         return exectx, bindings, shapes
 
     def convert_to_tensorrt(self, precision="fp16"):
         pytorch_model = self.init_model_pytorch()
         dummy_input = torch.rand((1, *self.config["input_shape"])).to(self.device)
-        torch.onnx.export(pytorch_model, dummy_input, "temp.onnx")
+        onnx_path = os.path.join(self.model_path, "best.onnx")
+        torch.onnx.export(
+            pytorch_model,
+            dummy_input,
+            onnx_path,
+            input_names=["input"],
+            output_names=["output"],
+            opset_version=18,
+            do_constant_folding=True,
+            dynamo=False,
+        )
         trt_logger = self.trt.Logger(self.trt.Logger.ERROR)
         builder = self.trt.Builder(trt_logger)
-        flag = 1 << (int)(self.trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        flag = (
+            1 << int(self.trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+            if hasattr(self.trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH")
+            else 0
+        )
         network = builder.create_network(flag)
         config = builder.create_builder_config()
         parser = self.trt.OnnxParser(network, trt_logger)
-        with open("temp.onnx", "rb") as model:
-            parser.parse(model.read())
-        if precision == "fp16":
+        with open(onnx_path, "rb") as model:
+            parsed = parser.parse(model.read())
+        if not parsed:
+            errors = "\n".join(
+                str(parser.get_error(i)) for i in range(parser.num_errors)
+            )
+            raise RuntimeError(f"TensorRT ONNX parse failed:\n{errors}")
+        config.set_memory_pool_limit(self.trt.MemoryPoolType.WORKSPACE, 4 << 30)
+        if precision == "fp16" and hasattr(self.trt.BuilderFlag, "FP16"):
             config.set_flag(self.trt.BuilderFlag.FP16)
-        engine = builder.build_engine(network, config)
+        engine = builder.build_serialized_network(network, config)
+        if engine is None:
+            raise RuntimeError("TensorRT engine build failed.")
         with open(os.path.join(self.model_path, "best.trt"), "wb") as f:
-            f.write(engine.serialize())
-        os.remove("temp.onnx")
+            f.write(engine)
 
     def infer_model_pytorch(self, img):
-        tensor = to_scaled_tensor(img).unsqueeze(0).to(self.device)
-        tensor = transforms.Resize(self.config["input_shape"][1:][::-1])(tensor)
+        tensor = image_to_model_tensor(img, self.config).unsqueeze(0).to(self.device)
+        amp_dtype = (
+            getattr(torch, self.config.get("amp_dtype", "bfloat16"))
+            if self.config.get("use_amp", False) and self.device.type == "cuda"
+            else None
+        )
         with torch.inference_mode():
-            pred = self.model(tensor)
-        return pred.cpu().numpy()
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=amp_dtype,
+                enabled=amp_dtype is not None,
+            ):
+                pred = self.model(tensor)
+        return pred.float().cpu().numpy()
 
     def infer_model_tensorrt(self, img):
-        tensor = transforms.Compose(
-            [
-                to_scaled_tensor,
-                transforms.Resize(self.config["input_shape"][1:][::-1]),
-            ]
-        )(img).contiguous()
-        tensor = tensor.numpy()  # convert to numpy
-        self.cuda.memcpy_htod(self.bindings[0], tensor)  # copy input to GPU
-        self.exectx.execute_v2(self.bindings)  # infer model
-        pred = np.empty(self.shapes[1], dtype=np.float32)  # allocate output
-        self.cuda.memcpy_dtoh(pred, self.bindings[1])  # copy output to CPU
+        tensor = image_to_model_tensor(img, self.config).unsqueeze(0).contiguous()
+        tensor = tensor.numpy().astype(self.trt_input_dtype)
+        pred = np.empty(self.trt_output_shape, dtype=self.trt_output_dtype)
+        self.cuda.memcpy_htod_async(
+            self.bindings[self.trt_input_name],
+            tensor,
+            self.trt_stream,
+        )
+        self.exectx.execute_async_v3(self.trt_stream.handle)
+        self.cuda.memcpy_dtoh_async(
+            pred,
+            self.bindings[self.trt_output_name],
+            self.trt_stream,
+        )
+        self.trt_stream.synchronize()
         return pred
 
     def detect(self, img):
@@ -179,6 +273,20 @@ class Detector:
             pred = self.infer_model_pytorch(img)
         elif self.runtime == "tensorrt":
             pred = self.infer_model_tensorrt(img)
+        if (
+            self.config["method"] == "regression"
+            and self.config.get("inference_tta_flip", False)
+        ):
+            flipped_img = ImageOps.mirror(img)
+            if self.runtime == "pytorch":
+                flipped_pred = self.infer_model_pytorch(flipped_img)
+            elif self.runtime == "tensorrt":
+                flipped_pred = self.infer_model_tensorrt(flipped_img)
+            pred = average_regression_flip_predictions(
+                pred,
+                flipped_pred,
+                self.config["anchors"],
+            )
 
         if self.config["method"] == "classification":
             clf = pred.reshape(2, self.config["anchors"], self.config["classes"] + 1)
@@ -190,7 +298,13 @@ class Detector:
         elif self.config["method"] == "regression":
             traj = pred[:, :-1].reshape(2, self.config["anchors"])
             ylim = 1 / (1 + np.exp(-pred[:, -1].item()))  # sigmoid
-            rails = regression_to_rails(traj, ylim)
+            rails = regression_to_rails(
+                traj,
+                ylim,
+                ylimit_offset=self.config.get("postprocess_ylimit_offset", 0.0),
+                rail_width_scale=self.config.get("postprocess_rail_width_scale", 1.0),
+                center_offset=self.config.get("postprocess_center_offset", 0.0),
+            )
             rails = scale_rails(rails, crop_coords, original_shape)
             rails = np.round(rails).astype(int)
             res = rails.tolist()

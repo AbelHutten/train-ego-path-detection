@@ -1,0 +1,6 @@
+# Optional requirements for TensorRT export/profiling.
+# Install with:
+#   .venv/bin/pip install -r requirements-tensorrt.txt --extra-index-url https://pypi.nvidia.com
+onnx
+pycuda
+tensorrt

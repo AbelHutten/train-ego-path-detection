@@ -7,12 +7,18 @@ torchvision
 
 # requirements for training
 wandb
+tqdm
+
+# requirements for local DINOv3 backbone loading
+ftfy
+omegaconf
+regex
+scikit-learn
+submitit
+termcolor
+torchmetrics
 
 # requirements for video inference
 opencv-python
 
-# requirements for TensorRT usage
-onnx
-onnxruntime
-pycuda
-tensorrt
+# Optional TensorRT profiling/export dependencies live in requirements-tensorrt.txt.

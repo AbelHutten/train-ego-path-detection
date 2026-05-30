@@ -5,3 +5,10 @@ wandb/
 **/__pycache__
 **/.DS_Store
 .vscode/
+
+dinov3_models/
+Railsem19.v7i.coco/
+external/dinov3/
+
+egopath/
+.venv/

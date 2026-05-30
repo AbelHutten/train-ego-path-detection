@@ -1,8 +1,9 @@
 import math
 
 import torch.nn as nn
+from torchvision.ops import Conv2dNormActivation
 
-from .backbone import EfficientNetBackbone, ResNetBackbone
+from .backbone import DinoV3Backbone, EfficientNetBackbone, ResNetBackbone
 from .decoder import UNetDecoder
 
 
@@ -69,6 +70,13 @@ class RegressionNet(nn.Module):
         pool_channels,
         fc_hidden_size,
         pretrained=False,
+        dinov3_repo_dir="external/dinov3",
+        dinov3_weights_dir="dinov3_models",
+        dinov3_intermediate_layers=4,
+        dinov3_adapter_channels=256,
+        dinov3_adapter_depth=1,
+        dinov3_layer_set="four_last",
+        dinov3_use_cls_token=False,
     ):
         """Initializes the train ego-path detection model for the regression method.
 
@@ -81,19 +89,62 @@ class RegressionNet(nn.Module):
             pretrained (bool, optional): Whether to use pretrained weights for the backbone. Defaults to False.
         """
         super(RegressionNet, self).__init__()
-        if backbone.startswith("efficientnet"):
+        if backbone.startswith("dinov3"):
+            self.backbone = DinoV3Backbone(
+                name=backbone,
+                repo_dir=dinov3_repo_dir,
+                weights_dir=dinov3_weights_dir,
+                intermediate_layers=dinov3_intermediate_layers,
+                layer_set=dinov3_layer_set,
+                use_cls_token=dinov3_use_cls_token,
+            )
+            if dinov3_adapter_depth < 1:
+                raise ValueError("dinov3_adapter_depth must be >= 1")
+            adapter_layers = [
+                Conv2dNormActivation(
+                    in_channels=self.backbone.out_channels[-1],
+                    out_channels=dinov3_adapter_channels,
+                    kernel_size=3,
+                    padding=1,
+                    activation_layer=nn.ReLU,
+                )
+            ]
+            for _ in range(dinov3_adapter_depth - 1):
+                adapter_layers.append(
+                    Conv2dNormActivation(
+                        in_channels=dinov3_adapter_channels,
+                        out_channels=dinov3_adapter_channels,
+                        kernel_size=3,
+                        padding=1,
+                        activation_layer=nn.ReLU,
+                    )
+                )
+            adapter_layers.append(
+                nn.Conv2d(
+                    in_channels=dinov3_adapter_channels,
+                    out_channels=pool_channels,
+                    kernel_size=1,
+                )
+            )
+            self.pool = nn.Sequential(*adapter_layers)
+        elif backbone.startswith("efficientnet"):
             self.backbone = EfficientNetBackbone(
                 version=backbone[13:], pretrained=pretrained
             )
+            self.pool = nn.Conv2d(
+                in_channels=self.backbone.out_channels[-1],
+                out_channels=pool_channels,
+                kernel_size=1,
+            )  # stride=1, padding=0
         elif backbone.startswith("resnet"):
             self.backbone = ResNetBackbone(version=backbone[6:], pretrained=pretrained)
+            self.pool = nn.Conv2d(
+                in_channels=self.backbone.out_channels[-1],
+                out_channels=pool_channels,
+                kernel_size=1,
+            )  # stride=1, padding=0
         else:
             raise NotImplementedError
-        self.pool = nn.Conv2d(
-            in_channels=self.backbone.out_channels[-1],
-            out_channels=pool_channels,
-            kernel_size=1,
-        )  # stride=1, padding=0
         self.fc = nn.Sequential(
             nn.Linear(
                 pool_channels

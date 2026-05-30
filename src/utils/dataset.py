@@ -8,7 +8,18 @@ from torch.utils.data import Dataset
 from torchvision.transforms import v2 as transforms
 
 from .common import to_scaled_tensor
+from .common import get_normalize_transform
 from .postprocessing import regression_to_rails
+
+
+def get_labeled_image_names(imgs_path, annotations_path):
+    with open(annotations_path) as json_file:
+        annotations = json.load(json_file)
+    return sorted(
+        img_name
+        for img_name in annotations.keys()
+        if os.path.exists(os.path.join(imgs_path, img_name))
+    )
 
 
 class PathsDataset(Dataset):
@@ -37,7 +48,8 @@ class PathsDataset(Dataset):
         self.imgs_path = imgs_path
         with open(annotations_path) as json_file:
             self.annotations = json.load(json_file)
-        self.imgs = [sorted(self.annotations.keys())[i] for i in indices]
+        self.available_imgs = get_labeled_image_names(imgs_path, annotations_path)
+        self.imgs = [self.available_imgs[i] for i in indices]
         self.config = config
         self.method = method
 
@@ -62,6 +74,7 @@ class PathsDataset(Dataset):
             if to_tensor
             else None
         )
+        self.normalize = get_normalize_transform(config) if to_tensor else None
 
     def __len__(self):
         return len(self.imgs)
@@ -77,6 +90,8 @@ class PathsDataset(Dataset):
             img = self.to_tensor(img)
         if self.img_aug:
             img = self.img_aug(img)
+        if self.normalize is not None:
+            img = self.normalize(img)
         if self.method == "regression":
             path_gt, ylim_gt = self.generate_target_regression(rails_mask)
             if self.to_tensor:
@@ -97,7 +112,24 @@ class PathsDataset(Dataset):
                 segmentation = to_scaled_tensor(segmentation)
             return img, segmentation
 
+    def scale_annotation(self, shape, annotation):
+        source_shape = self.config.get("annotation_shape")
+        if source_shape is None:
+            return annotation
+        source_height, source_width = source_shape
+        target_width, target_height = shape
+        x_scale = (target_width - 1) / (source_width - 1)
+        y_scale = (target_height - 1) / (source_height - 1)
+        scaled = {}
+        for rail_name in ("left_rail", "right_rail"):
+            rail = np.array(annotation[rail_name], dtype=np.float32)
+            rail[:, 0] = np.clip(np.round(rail[:, 0] * x_scale), 0, target_width - 1)
+            rail[:, 1] = np.clip(np.round(rail[:, 1] * y_scale), 0, target_height - 1)
+            scaled[rail_name] = rail.astype(int).tolist()
+        return scaled
+
     def generate_rails_mask(self, shape, annotation):
+        annotation = self.scale_annotation(shape, annotation)
         rails_mask = Image.new("L", shape, 0)
         draw = ImageDraw.Draw(rails_mask)
         rails = [np.array(annotation["left_rail"]), np.array(annotation["right_rail"])]

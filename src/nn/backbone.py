@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+
+import torch
 import torch.nn as nn
 import torchvision.models as models
 
@@ -86,3 +90,108 @@ class EfficientNetBackbone(nn.Module):
             if i + 1 in self.out_levels:
                 features.append(x)
         return features
+
+
+class DinoV3Backbone(nn.Module):
+    def __init__(
+        self,
+        name,
+        repo_dir="external/dinov3",
+        weights_dir="dinov3_models",
+        intermediate_layers=4,
+        layer_set="four_last",
+        use_cls_token=False,
+    ):
+        """Frozen DINOv3 ViT feature extractor.
+
+        DINOv3 is loaded from the official local repository and checkpoint files.
+        The module always stays frozen/eval, including when the parent model is
+        switched to training mode.
+        """
+        super().__init__()
+        specs = {
+            "dinov3-vits16": (
+                "dinov3_vits16",
+                "dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
+                384,
+            ),
+            "dinov3-vits16plus": (
+                "dinov3_vits16plus",
+                "dinov3_vits16plus_pretrain_lvd1689m-4057cbaa.pth",
+                384,
+            ),
+            "dinov3-vitb16": (
+                "dinov3_vitb16",
+                "dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth",
+                768,
+            ),
+        }
+        if name not in specs:
+            raise NotImplementedError
+
+        project_root = Path(__file__).resolve().parents[2]
+        repo_path = Path(repo_dir)
+        weights_path = Path(weights_dir)
+        if not repo_path.is_absolute():
+            repo_path = project_root / repo_path
+        if not weights_path.is_absolute():
+            weights_path = project_root / weights_path
+
+        hub_name, weights_file, embed_dim = specs[name]
+        checkpoint_path = weights_path / weights_file
+        if not repo_path.exists():
+            raise FileNotFoundError(
+                f"DINOv3 repository not found at {repo_path}. "
+                "Clone facebookresearch/dinov3 into external/dinov3."
+            )
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"DINOv3 checkpoint not found: {checkpoint_path}")
+
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+        self.model = torch.hub.load(
+            str(repo_path),
+            hub_name,
+            source="local",
+            pretrained=False,
+        )
+        state_dict = torch.load(checkpoint_path, map_location="cpu")
+        self.model.load_state_dict(state_dict, strict=True)
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        self.use_cls_token = use_cls_token
+        n_blocks = getattr(self.model, "n_blocks")
+        if layer_set == "last":
+            self.layer_indices = [n_blocks - 1]
+        elif layer_set == "four_last":
+            self.layer_indices = list(range(n_blocks - intermediate_layers, n_blocks))
+        elif layer_set == "four_even":
+            self.layer_indices = [i * (n_blocks // 4) - 1 for i in range(1, 5)]
+        else:
+            raise ValueError(f"Unsupported DINOv3 layer_set: {layer_set}")
+        channel_multiplier = 2 if use_cls_token else 1
+        self.out_channels = (embed_dim * len(self.layer_indices) * channel_multiplier,)
+        self.reduction_factor = 16
+
+    def train(self, mode=True):
+        super().train(False)
+        self.model.eval()
+        return self
+
+    def forward(self, x):
+        with torch.no_grad():
+            features = self.model.get_intermediate_layers(
+                x,
+                n=self.layer_indices,
+                reshape=True,
+                return_class_token=self.use_cls_token,
+                norm=True,
+            )
+        if self.use_cls_token:
+            features = [
+                torch.cat((patch, cls[:, :, None, None].expand_as(patch)), dim=1)
+                for patch, cls in features
+            ]
+        return [torch.cat(features, dim=1)]

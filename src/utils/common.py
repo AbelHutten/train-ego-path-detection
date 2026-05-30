@@ -10,6 +10,24 @@ to_scaled_tensor = transforms.Compose(
 )  # [0, 255] PIL.Image or numpy.ndarray to [0, 1] torchvision Image (torch.Tensor)
 
 
+def get_normalize_transform(config):
+    if not config.get("normalize_images", False):
+        return None
+    return transforms.Normalize(
+        mean=tuple(config["image_mean"]),
+        std=tuple(config["image_std"]),
+    )
+
+
+def image_to_model_tensor(img, config):
+    tensor = to_scaled_tensor(img)
+    tensor = transforms.Resize(config["input_shape"][1:][::-1])(tensor)
+    normalize = get_normalize_transform(config)
+    if normalize is not None:
+        tensor = normalize(tensor)
+    return tensor
+
+
 def split_dataset(indices, proportions):
     """Splits the dataset indices into training, validation and test sets.
 
@@ -66,6 +84,8 @@ def set_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def set_worker_seeds(worker_id):

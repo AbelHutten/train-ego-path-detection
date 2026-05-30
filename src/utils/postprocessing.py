@@ -2,6 +2,21 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 
+def unflip_regression_prediction(pred, anchors):
+    pred = np.asarray(pred, dtype=np.float32).reshape(-1)
+    traj = pred[:-1].reshape(2, anchors)
+    unflipped = np.empty_like(pred)
+    unflipped[:-1] = np.stack((1 - traj[1, :], 1 - traj[0, :])).reshape(-1)
+    unflipped[-1] = pred[-1]
+    return unflipped
+
+
+def average_regression_flip_predictions(pred, flipped_pred, anchors):
+    pred = np.asarray(pred, dtype=np.float32).reshape(-1)
+    flipped_pred = unflip_regression_prediction(flipped_pred, anchors)
+    return ((pred + flipped_pred) * 0.5).reshape(1, -1)
+
+
 def classifications_to_rails(clf, classes):
     """Processes the classification model's output to an array of left and right rail point relative coordinates (x, y).
 
@@ -23,16 +38,33 @@ def classifications_to_rails(clf, classes):
     return np.array(rails)
 
 
-def regression_to_rails(traj, ylim):
+def regression_to_rails(
+    traj,
+    ylim,
+    ylimit_offset=0.0,
+    rail_width_scale=1.0,
+    center_offset=0.0,
+):
     """Processes the regression model's output to an array of left and right rail point relative coordinates (x, y).
 
     Args:
         traj (numpy.ndarray): Regressed x-coordinates for each rail at each anchor. Shape of (2, H).
         ylim (float): Regressed y-limit of the ego-path (between 0 and 1)
+        ylimit_offset (float): Calibration offset added to ylim before cropping.
+        rail_width_scale (float): Calibration multiplier for the predicted rail width.
+        center_offset (float): Calibration offset added to the normalized rail center.
 
     Returns:
         numpy.ndarray: Ego-path as an array of left and right rail points. Shape of (2, N, 2) with N <= H.
     """
+    traj = np.array(traj, dtype=np.float32, copy=True)
+    if rail_width_scale != 1.0 or center_offset != 0.0:
+        center = (traj[0, :] + traj[1, :]) * 0.5 + center_offset
+        half_width = (traj[1, :] - traj[0, :]) * 0.5 * rail_width_scale
+        traj[0, :] = center - half_width
+        traj[1, :] = center + half_width
+
+    ylim = float(np.clip(ylim + ylimit_offset, 0.0, 1.0))
     limit_idx = round(ylim * traj.shape[1])  # convert ylim to index
     switched_idx = np.where(traj[0, :] >= traj[1, :])[0]  # if left rail >= right rail
     switched_idx = switched_idx[0] if switched_idx.size > 0 else traj.shape[1]
