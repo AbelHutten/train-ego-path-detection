@@ -12,6 +12,7 @@ It uses a frozen `dinov3-vits16plus` ViT backbone at `512x512`, a trainable regr
 |---|:---:|:---:|:---:|:---:|
 | `dinov3-vits16plus-512-tta` | DINOv3 ViT-S+ | Regression + flip TTA | 4.97 / 1.16 ms | 0.9608 |
 | `dinov3-vits16plus-512-deep-stage1` | DINOv3 ViT-S+ | Regression | 4.91 / 1.15 ms | 0.9589 |
+| `dinov3-vits16plus-640-deep-stage1` | DINOv3 ViT-S+ | Regression | 7.88 / 1.52 ms | 0.9575 |
 | `dinov3-vits16plus-512-lr1e-5-constant` | DINOv3 ViT-S+ | Regression | not rerun / same architecture | 0.9588 |
 | `dinov3-vits16-512-stage1` | DINOv3 ViT-S | Regression | 4.18 / 0.94 ms | 0.9317 |
 
@@ -26,6 +27,7 @@ For operational context, I also measured full detector latency on one `1280x720`
 | Run | TTA | Detector Mean | Detector P95 | FPS |
 |---|:---:|---:|---:|---:|
 | `dinov3-vits16plus-512-tta` | yes | 15.528 ms | 16.231 ms | 64.4 |
+| `dinov3-vits16plus-640-deep-stage1` | no | 8.797 ms | 8.960 ms | 113.7 |
 | `dinov3-vits16plus-512-deep-stage1` | no | 8.317 ms | 8.760 ms | 120.2 |
 | `dinov3-vits16-512-stage1` | no | 7.575 ms | 7.996 ms | 132.0 |
 
@@ -52,7 +54,7 @@ The training recipe was tuned for this machine:
 - GPU: NVIDIA RTX 4090, 24 GB.
 - CPU: Intel Core i7-14700KF, 28 logical CPUs.
 - RAM: 62 GiB.
-- Batch size 32 at `512x512`.
+- Batch size 32 at `512x512` and `640x640`; batch size 16 for the stopped `768x768` trial.
 - CUDA bf16 autocast, TF32 matmul, pinned dataloaders, persistent workers, and `torch.compile` during training.
 - AdamW over trainable adapter/head parameters only.
 - OneCycle schedule with max LR `1e-3`, weight decay `1e-3`, gradient clip `1.0`, 250 epochs.
@@ -64,6 +66,8 @@ The smallest ViT-S backbone trained cleanly but plateaued far below the target: 
 The default ViT-S+ head was better but still not close enough early in training. Increasing input size to `768x768` with batch size 16 did not help enough for the time cost; that run reached about `0.873` validation IoU by epoch 50 and was stopped.
 
 A deeper trainable adapter was the key architecture change. With `dinov3-vits16plus`, adapter channels `512`, adapter depth `3`, pool channels `16`, and FC hidden size `2048`, the frozen-backbone run reached `0.959603` validation IoU and `0.958918` test IoU without TTA.
+
+The same deeper ViT-S+ recipe at `640x640`, matching the original paper resolution more closely, trained successfully but did not beat the accepted `512x512` TTA artifact. It reached `0.958583` validation IoU and `0.957462` test IoU. The higher resolution also increased repo-style latency from `4.91 / 1.15 ms` to `7.88 / 1.52 ms` for PyTorch/TensorRT.
 
 Postprocess calibration was checked as a possible source of the remaining gap. Grid search over y-limit offset and rail-width scale selected the unmodified decoder: `ylimit_offset=0.0`, `rail_width_scale=1.0`, `center_offset=0.0`. That means the miss was not caused by an obvious global width or y-limit bias.
 
@@ -132,6 +136,12 @@ Same ViT-S+ recipe at `768x768`:
 .venv/bin/python train.py regression dinov3-vits16plus --device cuda --run-name dinov3-vits16plus-768 --input-size 768 --batch-size 16 --epochs 125 --dinov3-adapter-channels 512 --dinov3-adapter-depth 3 --pool-channels 16 --fc-hidden-size 2048
 ```
 
+Same ViT-S+ recipe at `640x640`, matching the original paper resolution:
+
+```bash
+.venv/bin/python train.py regression dinov3-vits16plus --device cuda --run-name dinov3-vits16plus-512 --save-run-name dinov3-vits16plus-640-deep-stage1 --input-size 640 --dinov3-adapter-channels 512 --dinov3-adapter-depth 3 --pool-channels 16 --fc-hidden-size 2048
+```
+
 Same ViT-S+ recipe without flip TTA:
 
 ```bash
@@ -142,6 +152,12 @@ Benchmark a non-TTA ViT-S+ checkpoint:
 
 ```bash
 .venv/bin/python train.py regression dinov3-vits16plus --device cuda --run-name dinov3-vits16plus-512 --resume-from weights/dinov3-vits16plus-512-deep-stage1 --benchmark-latency --benchmark-tensorrt --trt-precision fp16 --save-run-name dinov3-vits16plus-512-deep-stage1 --latency-warmup 50 --latency-runs 1000 --dinov3-adapter-channels 512 --dinov3-adapter-depth 3 --pool-channels 16 --fc-hidden-size 2048
+```
+
+Benchmark the `640x640` ViT-S+ checkpoint:
+
+```bash
+.venv/bin/python train.py regression dinov3-vits16plus --device cuda --run-name dinov3-vits16plus-512 --resume-from weights/dinov3-vits16plus-640-deep-stage1 --benchmark-latency --benchmark-tensorrt --trt-precision fp16 --save-run-name dinov3-vits16plus-640-deep-stage1 --latency-warmup 50 --latency-runs 1000 --input-size 640 --dinov3-adapter-channels 512 --dinov3-adapter-depth 3 --pool-channels 16 --fc-hidden-size 2048
 ```
 
 Benchmark the ViT-S baseline:
@@ -159,3 +175,4 @@ Benchmark the ViT-S baseline:
 - Accepted metrics: `weights/dinov3-vits16plus-512-tta/metrics.yaml`
 - Accepted latency: `weights/dinov3-vits16plus-512-tta/latency.yaml`
 - Best non-TTA source checkpoint: `weights/dinov3-vits16plus-512-deep-stage1/best.pt`
+- Best 640x640 comparison checkpoint: `weights/dinov3-vits16plus-640-deep-stage1/best.pt`
