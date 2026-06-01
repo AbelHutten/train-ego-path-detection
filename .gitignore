@@ -9,6 +9,8 @@ wandb/
 dinov3_models/
 Railsem19.v7i.coco/
 external/dinov3/
+external/RT-DETRv4/
+rtdetrv4_models/
 
 egopath/
 .venv/

@@ -36,6 +36,7 @@ BACKBONES = (
     [f"resnet{x}" for x in [18, 34, 50]]
     + [f"efficientnet-b{x}" for x in [0, 1, 2, 3]]
     + ["dinov3-vits16", "dinov3-vits16plus", "dinov3-vitb16"]
+    + [f"rtdetrv4-{x}" for x in ["s", "m", "l", "x"]]
 )
 
 
@@ -72,12 +73,20 @@ def parse_arguments():
     parser.add_argument("--fc-hidden-size", type=int, default=None)
     parser.add_argument("--dinov3-adapter-channels", type=int, default=None)
     parser.add_argument("--dinov3-adapter-depth", type=int, default=None)
+    parser.add_argument("--rtdetrv4-adapter-channels", type=int, default=None)
+    parser.add_argument("--rtdetrv4-adapter-depth", type=int, default=None)
+    parser.add_argument("--rtdetrv4-feature-level", type=int, default=None)
+    parser.add_argument("--rtdetrv4-no-encoder", action="store_true")
+    parser.add_argument("--weights-subdir", type=str, default=None)
     parser.add_argument("--optimizer", type=str, choices=["adam", "adamw"], default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--scheduler", type=str, choices=["one_cycle", "none"], default=None)
     parser.add_argument("--val-iou-interval", type=int, default=None)
     parser.add_argument("--val-iou-iterations", type=int, default=None)
     parser.add_argument("--test-iterations", type=int, default=None)
+    parser.add_argument("--limit-train-samples", type=int, default=None)
+    parser.add_argument("--limit-val-samples", type=int, default=None)
+    parser.add_argument("--limit-test-samples", type=int, default=None)
     parser.add_argument("--resume-from", type=str, default=None)
     parser.add_argument("--calibrate-postprocess", action="store_true")
     parser.add_argument("--calibration-iterations", type=int, default=None)
@@ -115,12 +124,19 @@ def override_config(config, args):
         "fc_hidden_size": args.fc_hidden_size,
         "dinov3_adapter_channels": args.dinov3_adapter_channels,
         "dinov3_adapter_depth": args.dinov3_adapter_depth,
+        "rtdetrv4_adapter_channels": args.rtdetrv4_adapter_channels,
+        "rtdetrv4_adapter_depth": args.rtdetrv4_adapter_depth,
+        "rtdetrv4_feature_level": args.rtdetrv4_feature_level,
+        "weights_subdir": args.weights_subdir,
         "optimizer": args.optimizer,
         "weight_decay": args.weight_decay,
         "scheduler": args.scheduler,
         "val_iou_interval": args.val_iou_interval,
         "val_iou_iterations": args.val_iou_iterations,
         "test_iterations": args.test_iterations,
+        "limit_train_samples": args.limit_train_samples,
+        "limit_val_samples": args.limit_val_samples,
+        "limit_test_samples": args.limit_test_samples,
         "calibration_iterations": args.calibration_iterations,
         "dinov3_layer_set": args.dinov3_layer_set,
     }
@@ -135,6 +151,8 @@ def override_config(config, args):
         config["resume_from"] = args.resume_from
     if args.dinov3_use_cls_token:
         config["dinov3_use_cls_token"] = True
+    if args.rtdetrv4_no_encoder:
+        config["rtdetrv4_use_encoder"] = False
     if args.inference_tta_flip:
         config["inference_tta_flip"] = True
     config["wandb"] = args.wandb or config.get("wandb", False)
@@ -176,6 +194,18 @@ def build_model(config):
             dinov3_adapter_depth=config.get("dinov3_adapter_depth", 1),
             dinov3_layer_set=config.get("dinov3_layer_set", "four_last"),
             dinov3_use_cls_token=config.get("dinov3_use_cls_token", False),
+            rtdetrv4_repo_dir=config.get(
+                "rtdetrv4_repo_dir", "external/RT-DETRv4"
+            ),
+            rtdetrv4_weights_dir=config.get(
+                "rtdetrv4_weights_dir", "rtdetrv4_models"
+            ),
+            rtdetrv4_use_encoder=config.get("rtdetrv4_use_encoder", True),
+            rtdetrv4_feature_level=config.get("rtdetrv4_feature_level", 1),
+            rtdetrv4_adapter_channels=config.get(
+                "rtdetrv4_adapter_channels", 256
+            ),
+            rtdetrv4_adapter_depth=config.get("rtdetrv4_adapter_depth", 1),
         )
     if method == "classification":
         return ClassificationNet(
@@ -669,6 +699,11 @@ def main(args):
         },
         args,
     )
+    if args.backbone.startswith("rtdetrv4"):
+        if args.input_size is None:
+            config["input_shape"] = [3, 640, 640]
+        config["normalize_images"] = False
+        config.setdefault("weights_subdir", "rt_detrv4_weights")
 
     if config.get("deterministic", False):
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -687,6 +722,12 @@ def main(args):
     random.shuffle(indices)
     proportions = (config["train_prop"], config["val_prop"], config["test_prop"])
     train_indices, val_indices, test_indices = split_dataset(indices, proportions)
+    if config.get("limit_train_samples") is not None:
+        train_indices = train_indices[: config["limit_train_samples"]]
+    if config.get("limit_val_samples") is not None:
+        val_indices = val_indices[: config["limit_val_samples"]]
+    if config.get("limit_test_samples") is not None:
+        test_indices = test_indices[: config["limit_test_samples"]]
     config["labeled_images"] = len(image_names)
     config["train_count"] = len(train_indices)
     config["val_count"] = len(val_indices)
@@ -740,7 +781,10 @@ def main(args):
         else f"{method}-{args.backbone}-{time.strftime('%Y%m%d-%H%M%S')}"
     )
     config["run_name"] = run_name
-    save_path = os.path.join(base_path, "weights", run_name)
+    weights_root = os.path.join(base_path, "weights")
+    if config.get("weights_subdir"):
+        weights_root = os.path.join(weights_root, config["weights_subdir"])
+    save_path = os.path.join(weights_root, run_name)
     os.makedirs(save_path, exist_ok=True)
     if not args.benchmark_latency:
         with open(os.path.join(save_path, "config.yaml"), "w") as f:

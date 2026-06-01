@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
 
 
@@ -195,3 +196,150 @@ class DinoV3Backbone(nn.Module):
                 for patch, cls in features
             ]
         return [torch.cat(features, dim=1)]
+
+
+class RTDetrV4Backbone(nn.Module):
+    def __init__(
+        self,
+        name,
+        repo_dir="external/RT-DETRv4",
+        weights_dir="rtdetrv4_models",
+        use_encoder=True,
+        feature_level=1,
+        checkpoint_key="ema",
+        deploy=True,
+    ):
+        """Frozen RT-DETRv4 HGNet/HybridEncoder feature extractor.
+
+        The local RT-DETRv4 repo is used only to instantiate the official model
+        graph. We load the local detector checkpoint, keep the detector feature
+        stack frozen/eval, and return a single concatenated feature map for the
+        ego-path regression head.
+        """
+        super().__init__()
+        specs = {
+            "rtdetrv4-s": (
+                "configs/rtv4/rtv4_hgnetv2_s_coco.yml",
+                "RTv4-S-hgnet.pth",
+                True,
+            ),
+            "rtdetrv4-m": (
+                "configs/rtv4/rtv4_hgnetv2_m_coco.yml",
+                "RTv4-M-hgnet.pth",
+                True,
+            ),
+            "rtdetrv4-l": (
+                "configs/rtv4/rtv4_hgnetv2_l_coco.yml",
+                "RTv4-L-hgnet.pth",
+                False,
+            ),
+            "rtdetrv4-x": (
+                "configs/rtv4/rtv4_hgnetv2_x_coco.yml",
+                "RTv4-X-hgnet.pth",
+                False,
+            ),
+        }
+        if name not in specs:
+            raise NotImplementedError
+
+        project_root = Path(__file__).resolve().parents[2]
+        repo_path = Path(repo_dir)
+        weights_path = Path(weights_dir)
+        if not repo_path.is_absolute():
+            repo_path = project_root / repo_path
+        if not weights_path.is_absolute():
+            weights_path = project_root / weights_path
+        if not repo_path.exists():
+            raise FileNotFoundError(
+                f"RT-DETRv4 repository not found at {repo_path}. "
+                "Clone RT-DETRs/RT-DETRv4 into external/RT-DETRv4."
+            )
+
+        config_file, weights_file, use_lab = specs[name]
+        config_path = repo_path / config_file
+        checkpoint_path = weights_path / weights_file
+        if not config_path.exists():
+            raise FileNotFoundError(f"RT-DETRv4 config not found: {config_path}")
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"RT-DETRv4 checkpoint not found: {checkpoint_path}"
+            )
+
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+        from engine.core import YAMLConfig, yaml_utils
+
+        yaml_utils.load_config.__defaults__ = ({},)
+        cfg = YAMLConfig(str(config_path))
+        cfg.yaml_cfg["HGNetv2"]["pretrained"] = False
+        cfg.yaml_cfg["HGNetv2"]["use_lab"] = use_lab
+        detector = cfg.model
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        state_dict = checkpoint
+        if isinstance(checkpoint, dict):
+            state_dict = checkpoint.get(
+                checkpoint_key,
+                checkpoint.get("model", checkpoint),
+            )
+            if isinstance(state_dict, dict) and "module" in state_dict:
+                state_dict = state_dict["module"]
+        detector.load_state_dict(state_dict, strict=True)
+        detector.eval()
+        if deploy:
+            detector.deploy()
+
+        self.detector_backbone = detector.backbone
+        self.detector_encoder = detector.encoder if use_encoder else None
+        if self.detector_encoder is not None:
+            # RT-DETRv4 stores eval positional embeddings as plain CPU tensor
+            # attributes, not buffers. Rebuilding them on the feature device keeps
+            # the frozen encoder portable across CPU/CUDA moves and input sizes.
+            self.detector_encoder.eval_spatial_size = None
+        self.use_encoder = use_encoder
+        if use_encoder:
+            feature_channels = list(detector.encoder.out_channels)
+            feature_strides = list(detector.encoder.feat_strides)
+        else:
+            return_idx = list(detector.backbone.return_idx)
+            feature_channels = [detector.backbone._out_channels[i] for i in return_idx]
+            feature_strides = [detector.backbone._out_strides[i] for i in return_idx]
+        if not 0 <= feature_level < len(feature_channels):
+            raise ValueError(
+                f"feature_level must be in [0, {len(feature_channels) - 1}], "
+                f"got {feature_level}"
+            )
+        self.feature_level = feature_level
+        self.out_channels = (sum(feature_channels),)
+        self.reduction_factor = feature_strides[feature_level]
+
+        for param in self.parameters():
+            param.requires_grad = False
+        self.eval()
+
+    def train(self, mode=True):
+        super().train(False)
+        self.detector_backbone.eval()
+        if self.detector_encoder is not None:
+            self.detector_encoder.eval()
+        return self
+
+    def forward(self, x):
+        with torch.no_grad():
+            features = self.detector_backbone(x)
+            if self.detector_encoder is not None:
+                features = self.detector_encoder(features)
+                if isinstance(features, tuple):
+                    features = features[0]
+            target_size = features[self.feature_level].shape[-2:]
+            resized = [
+                feature
+                if feature.shape[-2:] == target_size
+                else F.interpolate(
+                    feature,
+                    size=target_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                for feature in features
+            ]
+        return [torch.cat(resized, dim=1)]

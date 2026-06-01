@@ -3,8 +3,45 @@ import math
 import torch.nn as nn
 from torchvision.ops import Conv2dNormActivation
 
-from .backbone import DinoV3Backbone, EfficientNetBackbone, ResNetBackbone
+from .backbone import (
+    DinoV3Backbone,
+    EfficientNetBackbone,
+    ResNetBackbone,
+    RTDetrV4Backbone,
+)
 from .decoder import UNetDecoder
+
+
+def make_conv_adapter(in_channels, adapter_channels, adapter_depth, pool_channels):
+    if adapter_depth < 1:
+        raise ValueError("adapter_depth must be >= 1")
+    adapter_layers = [
+        Conv2dNormActivation(
+            in_channels=in_channels,
+            out_channels=adapter_channels,
+            kernel_size=3,
+            padding=1,
+            activation_layer=nn.ReLU,
+        )
+    ]
+    for _ in range(adapter_depth - 1):
+        adapter_layers.append(
+            Conv2dNormActivation(
+                in_channels=adapter_channels,
+                out_channels=adapter_channels,
+                kernel_size=3,
+                padding=1,
+                activation_layer=nn.ReLU,
+            )
+        )
+    adapter_layers.append(
+        nn.Conv2d(
+            in_channels=adapter_channels,
+            out_channels=pool_channels,
+            kernel_size=1,
+        )
+    )
+    return nn.Sequential(*adapter_layers)
 
 
 class ClassificationNet(nn.Module):
@@ -77,6 +114,12 @@ class RegressionNet(nn.Module):
         dinov3_adapter_depth=1,
         dinov3_layer_set="four_last",
         dinov3_use_cls_token=False,
+        rtdetrv4_repo_dir="external/RT-DETRv4",
+        rtdetrv4_weights_dir="rtdetrv4_models",
+        rtdetrv4_use_encoder=True,
+        rtdetrv4_feature_level=1,
+        rtdetrv4_adapter_channels=256,
+        rtdetrv4_adapter_depth=1,
     ):
         """Initializes the train ego-path detection model for the regression method.
 
@@ -98,35 +141,26 @@ class RegressionNet(nn.Module):
                 layer_set=dinov3_layer_set,
                 use_cls_token=dinov3_use_cls_token,
             )
-            if dinov3_adapter_depth < 1:
-                raise ValueError("dinov3_adapter_depth must be >= 1")
-            adapter_layers = [
-                Conv2dNormActivation(
-                    in_channels=self.backbone.out_channels[-1],
-                    out_channels=dinov3_adapter_channels,
-                    kernel_size=3,
-                    padding=1,
-                    activation_layer=nn.ReLU,
-                )
-            ]
-            for _ in range(dinov3_adapter_depth - 1):
-                adapter_layers.append(
-                    Conv2dNormActivation(
-                        in_channels=dinov3_adapter_channels,
-                        out_channels=dinov3_adapter_channels,
-                        kernel_size=3,
-                        padding=1,
-                        activation_layer=nn.ReLU,
-                    )
-                )
-            adapter_layers.append(
-                nn.Conv2d(
-                    in_channels=dinov3_adapter_channels,
-                    out_channels=pool_channels,
-                    kernel_size=1,
-                )
+            self.pool = make_conv_adapter(
+                in_channels=self.backbone.out_channels[-1],
+                adapter_channels=dinov3_adapter_channels,
+                adapter_depth=dinov3_adapter_depth,
+                pool_channels=pool_channels,
             )
-            self.pool = nn.Sequential(*adapter_layers)
+        elif backbone.startswith("rtdetrv4"):
+            self.backbone = RTDetrV4Backbone(
+                name=backbone,
+                repo_dir=rtdetrv4_repo_dir,
+                weights_dir=rtdetrv4_weights_dir,
+                use_encoder=rtdetrv4_use_encoder,
+                feature_level=rtdetrv4_feature_level,
+            )
+            self.pool = make_conv_adapter(
+                in_channels=self.backbone.out_channels[-1],
+                adapter_channels=rtdetrv4_adapter_channels,
+                adapter_depth=rtdetrv4_adapter_depth,
+                pool_channels=pool_channels,
+            )
         elif backbone.startswith("efficientnet"):
             self.backbone = EfficientNetBackbone(
                 version=backbone[13:], pretrained=pretrained

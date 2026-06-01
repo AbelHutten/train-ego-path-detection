@@ -113,6 +113,20 @@ class Detector:
                 dinov3_use_cls_token=self.config.get(
                     "dinov3_use_cls_token", False
                 ),
+                rtdetrv4_repo_dir=self.config.get(
+                    "rtdetrv4_repo_dir", "external/RT-DETRv4"
+                ),
+                rtdetrv4_weights_dir=self.config.get(
+                    "rtdetrv4_weights_dir", "rtdetrv4_models"
+                ),
+                rtdetrv4_use_encoder=self.config.get("rtdetrv4_use_encoder", True),
+                rtdetrv4_feature_level=self.config.get("rtdetrv4_feature_level", 1),
+                rtdetrv4_adapter_channels=self.config.get(
+                    "rtdetrv4_adapter_channels", 256
+                ),
+                rtdetrv4_adapter_depth=self.config.get(
+                    "rtdetrv4_adapter_depth", 1
+                ),
             )
         elif self.config["method"] == "segmentation":
             model = SegmentationNet(

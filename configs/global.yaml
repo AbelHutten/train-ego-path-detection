@@ -7,6 +7,8 @@ image_std: [0.229, 0.224, 0.225]
 annotation_shape: [1080, 1920]  # original ego-path annotation image shape (height, width)
 dinov3_repo_dir: "external/dinov3"
 dinov3_weights_dir: "dinov3_models"
+rtdetrv4_repo_dir: "external/RT-DETRv4"
+rtdetrv4_weights_dir: "rtdetrv4_models"
 
 # training configuration
 optimizer: adamw  # optimizer name ("adam" or "adamw")

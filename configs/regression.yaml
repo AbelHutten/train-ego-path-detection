@@ -18,3 +18,7 @@ dinov3_layer_set: four_last
 dinov3_use_cls_token: False
 dinov3_adapter_channels: 256
 dinov3_adapter_depth: 1
+rtdetrv4_use_encoder: True
+rtdetrv4_feature_level: 1
+rtdetrv4_adapter_channels: 256
+rtdetrv4_adapter_depth: 1

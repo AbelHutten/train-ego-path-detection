@@ -22,3 +22,4 @@ torchmetrics
 opencv-python
 
 # Optional TensorRT profiling/export dependencies live in requirements-tensorrt.txt.
+# Optional RT-DETRv4 frozen-backbone dependencies live in requirements-rtdetrv4.txt.

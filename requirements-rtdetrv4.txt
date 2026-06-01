@@ -1,0 +1,5 @@
+faster-coco-eval>=1.6.5
+tensorboard
+scipy
+calflops
+transformers
